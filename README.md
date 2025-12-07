@@ -1,3 +1,7 @@
+Based on the papers:
+- [Hybrid and hardware-oriented approaches for quantum diffusion models](https://ieeexplore.ieee.org/document/11227283)
+- [Quantum diffusion models](https://arxiv.org/abs/2311.15444)
+
 # Quantum Diffusion on MNIST
 
 MNIST-only quantum diffusion models with two architectures:
