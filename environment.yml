@@ -1,0 +1,14 @@
+name: qdm_venv  # Replace with your desired environment name
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.12
+  - numpy
+  - matplotlib
+  - tensorboard
+  - tqdm
+  - pip
+  - torch 
+  - torchvision
