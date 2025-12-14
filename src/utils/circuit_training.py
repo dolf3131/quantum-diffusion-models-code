@@ -9,7 +9,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from src.models.ansatzes import NNCPQC, PQC
+from src.models.ansatzes import NNCPQC, PQC, QuantumUNet
 from src.utils.schedule import make_schedule, device
 from src.utils.loss import infidelity_loss, LossHistory
 from src.utils.training_functions import assemble_input, assemble_mu_tilde
@@ -26,7 +26,7 @@ def training(path, hyperparameters, data_length):
         model_type, num_layers, PQC_LR, MLP_LR, batch_size, num_epochs, scheduler_patience, scheduler_gamma,
         T, num_qubits, beta0, betaT, schedule, schedule_exponent, init_variance, wd_PQC, wd_MLP,
         desired_digits, inference_noise, load_epoch, activation,
-        MLP_width, MLP_depth, PQC_depth, ACT_depth, num_ancilla, checkpoint, pqc_layers
+        MLP_width, MLP_depth, PQC_depth, ACT_depth, num_ancilla, checkpoint, pqc_layers, bottleneck_qubits
     ) = hyperparameters
 
     model_type = model_type.lower()
@@ -69,7 +69,19 @@ def training(path, hyperparameters, data_length):
 
     if is_pqc:
         layers = pqc_layers if pqc_layers is not None else [PQC_depth, PQC_depth, PQC_depth]
-        circuit = PQC(num_qubits, layers, T, init_variance, betas, activation=activation, device=device).to(device)
+        # circuit = PQC(num_qubits, layers, T, init_variance, betas, activation=activation, device=device).to(device)
+        # optimizer = Adam([{'params': circuit.get_pqc_params(), 'lr': PQC_LR, 'weight_decay': wd_PQC}])
+        layers = pqc_layers if pqc_layers is not None else [PQC_depth, PQC_depth, PQC_depth]
+        circuit = QuantumUNet(
+            num_qubits=num_qubits,       # 입력: 8 (256차원)
+            layers=layers,            # PQC 레이어 깊이
+            T=T, 
+            init_variance=init_variance, 
+            betas=betas, 
+            activation=activation, 
+            device=device,
+            bottleneck_qubits=bottleneck_qubits         # 병목: 4 (16차원) - 조절 가능
+        ).to(device)
         optimizer = Adam([{'params': circuit.get_pqc_params(), 'lr': PQC_LR, 'weight_decay': wd_PQC}])
     else:
         circuit = NNCPQC(num_qubits, num_ancilla, num_layers, MLP_depth, MLP_width, PQC_depth, ACT_depth, T, init_variance, batch_size).to(device)
@@ -122,18 +134,18 @@ def training(path, hyperparameters, data_length):
 
             # shape: (BS*T, 2^num_qubits)
             image_batch = image_batch.repeat(T, 1).to(device)
-
-            # shape: (BS*T, 2^num_qubits)
+            
             input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
             mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
 
-            # shape: (T, BS, 2^num_qubits)
+            # Reshape
             input_batch = input_batch.view(T, batch_size, -1)
             mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
 
-            # shape: (T, BS, 2^num_qubits)
-            input_batch = input_batch/torch.norm(input_batch, p=2, dim=2, keepdim=True).to(torch.complex64)
-            mu_tilde_t  = mu_tilde_t/torch.norm(mu_tilde_t, p=2, dim=2, keepdim=True).to(torch.complex64)
+            # Normalize
+            eps = 1e-8
+            input_batch = input_batch / (torch.norm(input_batch.abs(), p=2, dim=-1, keepdim=True) + eps)
+            mu_tilde_t  = mu_tilde_t / (torch.norm(mu_tilde_t.abs(), p=2, dim=-1, keepdim=True) + eps)
 
             # shape: (T, BS, 2^num_qubits)
             predicted_mu_t = circuit(input_batch)
@@ -184,7 +196,7 @@ def training(path, hyperparameters, data_length):
                 num_layers=num_layers, MLP_depth=MLP_depth, MLP_width=MLP_width,
                 PQC_depth=PQC_depth, ACT_depth=ACT_depth, num_ancilla=num_ancilla,
                 init_variance=init_variance, betas=betas, pqc_layers=pqc_layers,
-                activation=activation, batch_size=batch_size
+                activation=activation, batch_size=batch_size, bottleneck_qubits=bottleneck_qubits
             )
 
         epoch_loss_value = float(np.mean(epoch_losses))

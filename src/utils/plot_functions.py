@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from src.models.ansatzes import NNCPQC, PQC
+from src.models.ansatzes import NNCPQC, PQC, QuantumUNet
 from src.utils.training_functions import assemble_input
 from src.utils.schedule import get_default_device
 
@@ -72,6 +72,7 @@ def log_generated_samples(
     activation=False,
     batch_size=64,
     num_samples=16,
+    bottleneck_qubits=4,
 ):
     """Run reverse diffusion from noise and log a grid of samples to TensorBoard."""
     dim = 2 ** num_qubits
@@ -84,8 +85,12 @@ def log_generated_samples(
     try:
         if model_type == 'pqc':
             layers = pqc_layers if pqc_layers is not None else [PQC_depth, PQC_depth, PQC_depth]
-            circuit_clone = PQC(
-                num_qubits, layers, T, init_variance, betas, activation=activation, device=device
+            # circuit_clone = PQC(
+            #     num_qubits, layers, T, init_variance, betas, activation=activation, device=device
+            # ).to(device)
+            circuit_clone = QuantumUNet(
+                num_qubits, layers, T, init_variance, betas, 
+                activation=activation, device=device, bottleneck_qubits=bottleneck_qubits
             ).to(device)
             circuit_clone.load_current_params(directory)
         else:

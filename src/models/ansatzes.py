@@ -6,6 +6,34 @@ from torch import nn
 from src.models.custom_classes import IdentityUnitaryR3Ansatz, IdentityUnitaryR3Ansatz_batch
 
 
+def batch_angle_encoding(theta):
+    """
+    Angle Encoding: 각도(theta)를 양자 상태 벡터로 변환
+    theta: (Batch_Size, num_qubits)
+    Returns: (Batch_Size, 2^num_qubits)
+    """
+    batch_size, num_qubits = theta.shape
+    device = theta.device
+    
+    # 초기 상태 |00...0>
+    state = torch.ones(batch_size, 1, device=device, dtype=torch.complex64)
+
+    for i in range(num_qubits):
+        # Ry(theta) 회전: cos(theta/2)|0> + sin(theta/2)|1>
+        angle = theta[:, i].unsqueeze(1) # (Batch, 1)
+        
+        cos_val = torch.cos(angle / 2)
+        sin_val = torch.sin(angle / 2)
+        
+        # 큐비트 상태: [cos, sin]
+        qubit_state = torch.stack([cos_val, sin_val], dim=1).view(batch_size, 2).to(torch.complex64)
+
+        # Tensor Product (state ⊗ qubit_state)
+        state = state.view(batch_size, -1, 1) * qubit_state.view(batch_size, 1, 2)
+        state = state.view(batch_size, -1)
+        
+    return state
+
 class ComplexLeakyReLU(nn.Module):
     """LeakyReLU that acts independently on real and imaginary parts."""
 
@@ -20,6 +48,22 @@ class ComplexLeakyReLU(nn.Module):
             self.real_leaky_relu(input.real),
             self.imag_leaky_relu(input.imag)
         )
+class ComplexLinear(nn.Module):
+    """
+    Complex-valued Linear Layer with optional activation.
+    """
+    def __init__(self, in_features, out_features, activation=True):
+        super().__init__()
+        self.fc = nn.Linear(in_features * 2, out_features)
+        self.activation = activation
+        self.act_fn = nn.ReLU()
+
+    def forward(self, x_complex):
+        x_cat = torch.cat([x_complex.real, x_complex.imag], dim=-1) # (Batch, 2*Dim)
+        out = self.fc(x_cat)
+        if self.activation:
+            out = self.act_fn(out)
+        return out
 
 
 class PQC(nn.Module):
@@ -165,17 +209,16 @@ class PQC(nn.Module):
         output2 = output2[:, :2 ** self.num_qubits]
 
         # renormalize after measurement
-        output2 = output2 / torch.norm(output2, p=2, dim=1, keepdim=True)
+        output2 = output2 / torch.norm(output2.abs(), p=2, dim=1, keepdim=True)
 
         # optional activation
         if self.activation:
             output2 = self.act_func(output2)
-            output2 = output2 / torch.norm(output2, p=2, dim=1, keepdim=True)
+            output2 = output2 / torch.norm(output2.abs(), p=2, dim=1, keepdim=True)
 
         # third PQC block on data qubits
         predictions = self.model3(output2, self.params3)
-        predictions = predictions / torch.norm(predictions, p=2, dim=1, keepdim=True)
-
+        predictions = predictions / torch.norm(predictions.abs(), p=2, dim=1, keepdim=True)
         # truncate just in case (Identity ansatz preserves width, but keep consistency)
         predictions = predictions[:, :2 ** self.num_qubits]
 
@@ -303,12 +346,12 @@ class NNCPQC(nn.Module):
             # measure ancilla and normalize
             # shape: (T*BS, 2^num_qubits)
             output = output[:, :2 ** self.ACT_width]
-            output = output / torch.norm(output, p=2, dim=1, keepdim=True)
+            output = output / torch.norm(output.abs(), p=2, dim=1, keepdim=True)
 
             # activation block
             # shape: (T*BS, 2^num_qubits)
             output = self.ACT_models[layer](output, ACT_params)
-            output = output / torch.norm(output, p=2, dim=1, keepdim=True)
+            output = output / torch.norm(output.abs(), p=2, dim=1, keepdim=True)
 
             # put back ancilla
             # shape: (T*BS, 2^PQC_width)
@@ -373,3 +416,131 @@ class NNCPQC(nn.Module):
         mlp_parameters = []
         for model in self.MLP_models: mlp_parameters.extend(list(model.parameters()))
         return mlp_parameters
+
+
+class QuantumUNet(nn.Module):
+    """
+    Hybrid Quantum-Classical U-Net Ansatz
+    1. Encoder: ComplexLinear layers to downsample input to bottleneck size
+    2. Bottleneck: PQC operating on reduced qubit count
+    3. Decoder: ComplexLinear layers with skip connections to reconstruct output
+    4. Final output layer projecting back to original dimension
+    5. Normalization at key steps to maintain valid quantum states
+    6. Skip connections from encoder to decoder for feature preservation
+    7. PQC parameters managed via inherited methods from PQC class
+    8. Designed for quantum diffusion models with reduced quantum resource requirements
+    9. Flexible bottleneck qubit count for trade-off between expressivity and resource use
+    10. Suitable for image-like quantum data (e.g., 8 qubits = 256 dim input)
+    """
+    def __init__(self, num_qubits, layers, T, init_variance, betas, activation=False, device='cuda', bottleneck_qubits=4):
+        super(QuantumUNet, self).__init__()
+        
+        device = PQC._resolve_device(device)
+        self.device = device
+        self.T = T
+        self.betas = betas
+        self.num_qubits = num_qubits  # 원본 이미지 큐비트 (예: 8 -> 256 dim)
+        self.bn_qubits = bottleneck_qubits # 병목 구간 큐비트 (예: 4 -> 16 dim)
+        
+        input_dim = 2 ** num_qubits
+        input_flat_dim = input_dim * 2   # 512 (Real + Imag)
+        hidden_dim = 64 
+        bn_dim = 2 ** bottleneck_qubits
+
+        # --- [1] 활용할 PQC 모듈 초기화 (Composition) ---
+        # 작은 큐비트 수(bottleneck_qubits)를 가진 PQC를 생성하여 내부에 둡니다.
+        # 이렇게 하면 기존 PQC의 검증된 forward 로직을 그대로 쓸 수 있습니다.
+        self.pqc_bottleneck = PQC(
+            num_qubits=bottleneck_qubits, 
+            layers=layers, 
+            T=T, 
+            init_variance=init_variance, 
+            betas=betas, 
+            activation=activation, 
+            device=device
+        )
+
+        # --- [2] Encoder (Downsampling) ---
+        # ComplexLinear를 사용하여 Phase 정보를 잃지 않도록 함
+        self.enc1 = ComplexLinear(input_dim, hidden_dim) 
+        self.enc2 = nn.Linear(hidden_dim, bn_dim * 2)
+
+        # --- [3] Decoder (Upsampling with Skip) ---
+        # self.dec1 = nn.Linear(bn_dim * 2 + hidden_dim, hidden_dim) 
+        # self.act_dec1 = nn.ReLU()
+        self.dec1 = nn.Linear(bn_dim * 2 + input_flat_dim, hidden_dim) 
+        self.act_dec1 = nn.ReLU()
+        # Final Output: 256 dim (Complex 출력을 위해 2배인 512 출력)
+        # 지름길 학습 방지를 위해 Input Skip은 제거
+        self.final = nn.Linear(hidden_dim, input_dim * 2)
+
+    def forward(self, input):
+        # input: (T, Batch, 256) Complex
+        T_steps, batch_size, dim = input.shape
+        
+        # 1. Flatten Input (Real + Imag)
+        x = input.reshape(T_steps * batch_size, dim)
+        # 원본 입력을 실수 벡터로 펼칩니다. (나중에 Skip으로 씀)
+        x_flat = torch.cat([x.real, x.imag], dim=-1) # (Batch, 512)
+
+        # --- Encoder ---
+        e1 = self.enc1(x)        # (Batch, 64)
+        latent = self.enc2(e1)   # (Batch, 2*bn_dim)
+        
+        # --- Quantum State Prep ---
+        bn_dim = 2 ** self.bn_qubits
+        state = torch.complex(latent[:, :bn_dim], latent[:, bn_dim:])
+        state = state / (torch.norm(state, p=2, dim=1, keepdim=True) + 1e-8)
+        
+        # --- PQC Execution ---
+        state_reshaped = state.reshape(T_steps, batch_size, -1)
+        pqc_out = self.pqc_bottleneck(state_reshaped)
+        pqc_out = pqc_out.reshape(T_steps * batch_size, -1)
+
+        # --- Decoder ---
+        pqc_feats = torch.cat([pqc_out.real, pqc_out.imag], dim=-1)
+        
+        # [핵심 변경] e1 대신 x_flat(원본)을 결합합니다.
+        # 이제 Decoder는 '압축된 정보'와 '원본 정보'를 동시에 봅니다.
+        d1_input = torch.cat([pqc_feats, x_flat], dim=1) 
+        
+        d1 = self.act_dec1(self.dec1(d1_input))
+        out_feats = self.final(d1)
+        
+        # Output Reconstruction
+        out_real = out_feats[:, :dim]
+        out_imag = out_feats[:, dim:]
+        out = torch.complex(out_real, out_imag)
+        out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + 1e-8)
+        
+        return out.reshape(T_steps, batch_size, dim)
+    
+    # --- PQC의 파라미터 관리 기능 연동 (상속 효과) ---
+    def get_pqc_params(self):
+        return self.pqc_bottleneck.get_pqc_params() + \
+               list(self.enc1.parameters()) + list(self.enc2.parameters()) + \
+               list(self.dec1.parameters()) + list(self.final.parameters())
+
+    def save_params(self, directory, epoch=None, best=False):
+        for i in range(self.T):
+            filename = f'best{i}.pt' if best else (f'current{i}.pt' if epoch is None else f'epoch{epoch}_T{i}.pt')
+            pqc_params = {
+                'params1': self.pqc_bottleneck.params1[i].detach().clone(),
+                'params2': self.pqc_bottleneck.params2[i].detach().clone(),
+                'params3': self.pqc_bottleneck.params3[i].detach().clone(),
+                'unet_state': self.state_dict()
+            }
+            torch.save(pqc_params, f'{directory}/{filename}')
+            
+    def load_current_params(self, directory, epoch=None, noise=None):
+        i = self.T - 1
+        path = f'{directory}/current{i}.pt' if epoch is None else f'{directory}/epoch{epoch}_T{i}.pt'
+        try:
+            loaded_params = torch.load(path, map_location=self.device)
+            if 'unet_state' in loaded_params:
+                self.load_state_dict(loaded_params['unet_state'])
+        except FileNotFoundError:
+            pass
+
+    def get_mlp_params(self): return []
+    

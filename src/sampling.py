@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from src.models.ansatzes import PQC, NNCPQC
+from src.models.ansatzes import PQC, NNCPQC, QuantumUNet
 from src.utils.schedule import make_schedule
 
 
@@ -52,9 +52,13 @@ def main():
 
     model_type = args.model_type.lower()
     if model_type == "pqc":
-        circuit = PQC(
+        # circuit = PQC(
+        #     args.num_qubits, args.layers, args.T, args.init_variance, betas,
+        #     activation=args.activation, device=device
+        # ).to(device)
+        circuit = QuantumUNet(
             args.num_qubits, args.layers, args.T, args.init_variance, betas,
-            activation=args.activation, device=device
+            activation=args.activation, device=device, bottleneck_qubits=args.bottleneck_qubits
         ).to(device)
         try:
             circuit.load_best_params(args.checkpoint, noise=args.noise_factor)
@@ -89,7 +93,7 @@ def main():
             for t in range(args.T - 1, -1, -1):
                 large_batch = torch.zeros(args.T, 1, dim, device=device, dtype=torch.complex64)
                 large_batch[t] = batch
-                large_batch = large_batch / torch.norm(large_batch, p=2, dim=2, keepdim=True)
+                large_batch = large_batch / torch.norm(large_batch.abs(), p=2, dim=2, keepdim=True)
                 large_batch = circuit(large_batch)
                 batch = large_batch[t, :, :]
                 batch_history[t] = batch.unsqueeze(0)

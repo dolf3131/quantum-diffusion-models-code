@@ -12,8 +12,16 @@ def get_default_device():
         if torch.cuda.is_available() and torch.version.cuda is not None:
             return torch.device("cuda")
     except Exception:
-        # Any CUDA initialization issue -> use CPU
         pass
+
+    # 2. MPS (Apple Silicon)
+    # try:
+    #     if torch.backends.mps.is_available():
+    #         return torch.device("mps")
+    # except Exception:
+    #     pass
+
+    # 3. CPU
     return torch.device("cpu")
 
 

@@ -56,7 +56,14 @@ class EntanglingBlock(nn.Module):
         self.num_qubits = num_qubits
 
         layers = []
-        for i in range(self.num_qubits - 1):
+        # linear entanglement
+        # for i in range(self.num_qubits - 1):
+        #     layers.append(CNOT_to_layer(i, self.num_qubits, device=self.device))
+        
+        # pairwise entanglement
+        for i in range(0, self.num_qubits - 1, 2):
+            layers.append(CNOT_to_layer(i, self.num_qubits, device=self.device))
+        for i in range(1, self.num_qubits - 1, 2):
             layers.append(CNOT_to_layer(i, self.num_qubits, device=self.device))
 
         # return matrix product of layers from last to first

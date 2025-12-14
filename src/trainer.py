@@ -13,11 +13,11 @@ from src.utils.circuit_training import training
 # Define the list of possible values for each hyperparameter to search over
 hyperparameters = {
     "model_type":        ["PQC"],  # choose between 'NNCPQC' and 'PQC'
-    "num_layers":        [20],  # unitary+activation blocks for NNCPQC
-    "PQC_LR":            [5e-5],
-    "MLP_LR":            [5e-5],
-    "batch_size":        [64],
-    "num_epochs":        [2000],
+    "num_layers":        [10],  # unitary+activation blocks for NNCPQC
+    "PQC_LR":            [1e-2],
+    "MLP_LR":            [1e-2],
+    "batch_size":        [512],
+    "num_epochs":        [100],
     "scheduler_patience":[10],  # after how many epochs to reduce the learning rate
     "scheduler_gamma":   [0.97],  # factor by which to reduce the learning rate
     "T":                 [10],  # number of time steps in the diffusion process
@@ -39,12 +39,13 @@ hyperparameters = {
     "ACT_depth":         [4], # Depth of the activation block (NNCPQC only)
     "num_ancilla":       [1],  # Number of ancilla qubits (NNCPQC only)
     "checkpoint":        [None], # specify a path to Params as '/path/Params/' to use that checkpoint
-    "pqc_layers":        [[2, 2, 2]] # depths for the three PQC blocks when model_type='PQC'
+    "pqc_layers":        [[4, 4, 4]], # depths for the three PQC blocks when model_type='PQC'
+    "bottleneck_qubits": [8]
 }
 
 
 DATA_LENGTH = 8096 # number of samples in the dataset
-NUM_TRIALS = 2 # number of trials for each hyperparameter combination
+NUM_TRIALS = 1 # number of trials for each hyperparameter combination
 results_dir = 'results'
 
 # ================> DON'T MODIFY BELOW THIS LINE<================

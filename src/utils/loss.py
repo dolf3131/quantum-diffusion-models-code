@@ -27,10 +27,10 @@ def infidelity_loss(predictions, targets):
     assert torch.is_complex(predictions) and torch.is_complex(targets), "Inputs must be complex tensors."
     
     # shape: (T, BS, 2)
-    predictions_norm = predictions / torch.linalg.norm(predictions, dim=-1, keepdim=True)
+    predictions_norm = predictions / torch.linalg.norm(predictions.abs(), dim=-1, keepdim=True)
 
     # shape: (T, BS, 2)
-    targets_norm = targets / torch.linalg.norm(targets, dim=-1, keepdim=True)
+    targets_norm = targets / torch.linalg.norm(targets.abs(), dim=-1, keepdim=True)
 
     # shape: (T, BS)
     fidelity = torch.abs(torch.sum(torch.conj(predictions_norm) * targets_norm, dim=-1)) ** 2
