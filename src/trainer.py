@@ -14,8 +14,8 @@ from src.utils.circuit_training import training
 hyperparameters = {
     "model_type":        ["PQC"],  # choose between 'NNCPQC' and 'PQC'
     "num_layers":        [10],  # unitary+activation blocks for NNCPQC
-    "PQC_LR":            [1e-2],
-    "MLP_LR":            [1e-2],
+    "PQC_LR":            [1e-3],
+    "MLP_LR":            [1e-3],
     "batch_size":        [512],
     "num_epochs":        [100],
     "scheduler_patience":[10],  # after how many epochs to reduce the learning rate
@@ -29,7 +29,7 @@ hyperparameters = {
     "init_variance":     [0.7],  # initial variance of the parameters
     "wd_PQC":            [1e-5],  # L2 regularization
     "wd_MLP":            [1e-4],
-    "digits":            [[0, 1]],  # digits to train the model on
+    "digits":            [[0, 1]], #2, 3, 4, 5, 6, 7, 8, 9]],  # digits to train the model on
     "inference_noise":   [0.005],  # noise to add to the parameters during inference
     "load_epoch":        [None],  # checkpoint epoch (PQC only supports epoch checkpoints)
     "activation":        [True],  # whether to use activation function
@@ -40,7 +40,7 @@ hyperparameters = {
     "num_ancilla":       [1],  # Number of ancilla qubits (NNCPQC only)
     "checkpoint":        [None], # specify a path to Params as '/path/Params/' to use that checkpoint
     "pqc_layers":        [[4, 4, 4]], # depths for the three PQC blocks when model_type='PQC'
-    "bottleneck_qubits": [8]
+    "bottleneck_qubits": [4]
 }
 
 

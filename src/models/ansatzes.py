@@ -209,12 +209,12 @@ class PQC(nn.Module):
         output2 = output2[:, :2 ** self.num_qubits]
 
         # renormalize after measurement
-        output2 = output2 / torch.norm(output2.abs(), p=2, dim=1, keepdim=True)
+        output2 = output2 / (torch.norm(output2.abs(), p=2, dim=1, keepdim=True) + 1e-8)
 
         # optional activation
         if self.activation:
             output2 = self.act_func(output2)
-            output2 = output2 / torch.norm(output2.abs(), p=2, dim=1, keepdim=True)
+            output2 = output2 / (torch.norm(output2.abs(), p=2, dim=1, keepdim=True) + 1e-8)
 
         # third PQC block on data qubits
         predictions = self.model3(output2, self.params3)
@@ -418,20 +418,135 @@ class NNCPQC(nn.Module):
         return mlp_parameters
 
 
+# class QuantumUNet(nn.Module):
+#     """
+#     Hybrid Quantum-Classical U-Net Ansatz
+    
+#     Architecture:
+#     1. Encoder: ComplexLinear layers to downsample input to bottleneck size.
+#     2. Bottleneck: PQC operating on reduced qubit count (Quantum Core).
+#     3. Decoder: ComplexLinear layers with skip connections to reconstruct output.
+    
+#     Key Features:
+#     - Shared Weights: Unlike standard PQC models, Encoder/Decoder weights are shared across all timesteps T.
+#     - Single Checkpoint: Optimizes storage by saving the model state once per epoch, rather than T times.
+#     - Skip Connection: Mitigates the information bottleneck by combining classical features with quantum features.
+#     """
+#     def __init__(self, num_qubits, layers, T, init_variance, betas, activation=False, device='cuda', bottleneck_qubits=4):
+#         super(QuantumUNet, self).__init__()
+        
+#         device = PQC._resolve_device(device)
+#         self.device = device
+#         self.T = T
+#         self.betas = betas
+#         self.num_qubits = num_qubits  # 원본 이미지 큐비트 (예: 8 -> 256 dim)
+#         self.bn_qubits = bottleneck_qubits # 병목 구간 큐비트 (예: 4 -> 16 dim)
+        
+#         input_dim = 2 ** num_qubits
+#         input_flat_dim = input_dim * 2   # 512 (Real + Imag)
+#         hidden_dim = (2 ** num_qubits) * 2
+#         bn_dim = 2 ** bottleneck_qubits
+
+#         # --- [1] 활용할 PQC 모듈 초기화 (Composition) ---
+#         # 작은 큐비트 수(bottleneck_qubits)를 가진 PQC를 생성하여 내부에 둡니다.
+#         # 이렇게 하면 기존 PQC의 검증된 forward 로직을 그대로 쓸 수 있습니다.
+#         self.pqc_bottleneck = PQC(
+#             num_qubits=bottleneck_qubits, 
+#             layers=layers, 
+#             T=T, 
+#             init_variance=init_variance, 
+#             betas=betas, 
+#             activation=activation, 
+#             device=device
+#         )
+
+#         # --- [2] Encoder (Downsampling) ---
+#         # ComplexLinear를 사용하여 Phase 정보를 잃지 않도록 함
+#         self.enc1 = ComplexLinear(input_dim, hidden_dim) 
+#         self.enc2 = nn.Linear(hidden_dim, bn_dim * 2)
+
+#         # --- [3] Decoder (Upsampling with Skip) ---
+#         # self.dec1 = nn.Linear(bn_dim * 2 + hidden_dim, hidden_dim) 
+#         # self.act_dec1 = nn.ReLU()
+#         self.dec1 = nn.Linear(bn_dim * 2 + input_flat_dim, hidden_dim) 
+#         self.act_dec1 = nn.ReLU()
+#         # Final Output: 256 dim (Complex 출력을 위해 2배인 512 출력)
+#         # 지름길 학습 방지를 위해 Input Skip은 제거
+#         self.final = nn.Linear(hidden_dim, input_dim * 2)
+
+#     def forward(self, input):
+#         # input: (T, Batch, 256) Complex
+#         T_steps, batch_size, dim = input.shape
+        
+#         # 1. Flatten Input (Real + Imag)
+#         x = input.reshape(T_steps * batch_size, dim)
+#         x_flat = torch.cat([x.real, x.imag], dim=-1) # (Batch, 512)
+
+#         # --- Encoder ---
+#         e1 = self.enc1(x)        # (Batch, 64)
+#         latent = self.enc2(e1)   # (Batch, 2*bn_dim)
+        
+#         # --- Quantum State Prep ---
+#         bn_dim = 2 ** self.bn_qubits
+#         state = torch.complex(latent[:, :bn_dim], latent[:, bn_dim:])
+#         state = state / (torch.norm(state, p=2, dim=1, keepdim=True) + 1e-8)
+        
+#         # --- PQC Execution ---
+#         state_reshaped = state.reshape(T_steps, batch_size, -1)
+#         pqc_out = self.pqc_bottleneck(state_reshaped)
+#         pqc_out = pqc_out.reshape(T_steps * batch_size, -1)
+
+#         # --- Decoder ---
+#         pqc_feats = torch.cat([pqc_out.real, pqc_out.imag], dim=-1)
+        
+#         d1_input = torch.cat([pqc_feats, e1], dim=1) 
+        
+#         d1 = self.act_dec1(self.dec1(d1_input))
+#         out_feats = self.final(d1)
+        
+#         # Output Reconstruction
+#         out_real = out_feats[:, :dim]
+#         out_imag = out_feats[:, dim:]
+#         out = torch.complex(out_real, out_imag)
+#         out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + 1e-8)
+        
+#         return out.reshape(T_steps, batch_size, dim)
+    
+#     # --- PQC의 파라미터 관리 기능 연동 (상속 효과) ---
+#     def get_pqc_params(self):
+#         return self.pqc_bottleneck.get_pqc_params() + \
+#                list(self.enc1.parameters()) + list(self.enc2.parameters()) + \
+#                list(self.dec1.parameters()) + list(self.final.parameters())
+
+#     def save_params(self, directory, epoch=None, best=False):
+#         for i in range(self.T):
+#             filename = f'best{i}.pt' if best else (f'current{i}.pt' if epoch is None else f'epoch{epoch}_T{i}.pt')
+#             pqc_params = {
+#                 'params1': self.pqc_bottleneck.params1[i].detach().clone(),
+#                 'params2': self.pqc_bottleneck.params2[i].detach().clone(),
+#                 'params3': self.pqc_bottleneck.params3[i].detach().clone(),
+#                 'unet_state': self.state_dict()
+#             }
+#             torch.save(pqc_params, f'{directory}/{filename}')
+            
+#     def load_current_params(self, directory, epoch=None, noise=None):
+#         i = self.T - 1
+#         path = f'{directory}/current{i}.pt' if epoch is None else f'{directory}/epoch{epoch}_T{i}.pt'
+#         try:
+#             loaded_params = torch.load(path, map_location=self.device)
+#             if 'unet_state' in loaded_params:
+#                 self.load_state_dict(loaded_params['unet_state'])
+#         except FileNotFoundError:
+#             pass
+
+#     def get_mlp_params(self): return []
+    
+
 class QuantumUNet(nn.Module):
     """
-    Hybrid Quantum-Classical U-Net Ansatz
-    1. Encoder: ComplexLinear layers to downsample input to bottleneck size
-    2. Bottleneck: PQC operating on reduced qubit count
-    3. Decoder: ComplexLinear layers with skip connections to reconstruct output
-    4. Final output layer projecting back to original dimension
-    5. Normalization at key steps to maintain valid quantum states
-    6. Skip connections from encoder to decoder for feature preservation
-    7. PQC parameters managed via inherited methods from PQC class
-    8. Designed for quantum diffusion models with reduced quantum resource requirements
-    9. Flexible bottleneck qubit count for trade-off between expressivity and resource use
-    10. Suitable for image-like quantum data (e.g., 8 qubits = 256 dim input)
+    Hybrid Quantum-Classical U-Net Ansatz (Fixed for Real-valued Encoder Output)
     """
+
     def __init__(self, num_qubits, layers, T, init_variance, betas, activation=False, device='cuda', bottleneck_qubits=4):
         super(QuantumUNet, self).__init__()
         
@@ -439,17 +554,15 @@ class QuantumUNet(nn.Module):
         self.device = device
         self.T = T
         self.betas = betas
-        self.num_qubits = num_qubits  # 원본 이미지 큐비트 (예: 8 -> 256 dim)
-        self.bn_qubits = bottleneck_qubits # 병목 구간 큐비트 (예: 4 -> 16 dim)
+        self.num_qubits = num_qubits           
+        self.bn_qubits = bottleneck_qubits     
+        self.best_loss = float('inf')          
         
         input_dim = 2 ** num_qubits
-        input_flat_dim = input_dim * 2   # 512 (Real + Imag)
-        hidden_dim = 64 
+        hidden_dim = (2 ** num_qubits) * 2
         bn_dim = 2 ** bottleneck_qubits
 
-        # --- [1] 활용할 PQC 모듈 초기화 (Composition) ---
-        # 작은 큐비트 수(bottleneck_qubits)를 가진 PQC를 생성하여 내부에 둡니다.
-        # 이렇게 하면 기존 PQC의 검증된 forward 로직을 그대로 쓸 수 있습니다.
+        # --- [1] Quantum Bottleneck (PQC) ---
         self.pqc_bottleneck = PQC(
             num_qubits=bottleneck_qubits, 
             layers=layers, 
@@ -460,37 +573,35 @@ class QuantumUNet(nn.Module):
             device=device
         )
 
-        # --- [2] Encoder (Downsampling) ---
-        # ComplexLinear를 사용하여 Phase 정보를 잃지 않도록 함
+        # --- [2] Encoder ---
+        # ComplexLinear output is REAL (hidden_dim)
         self.enc1 = ComplexLinear(input_dim, hidden_dim) 
         self.enc2 = nn.Linear(hidden_dim, bn_dim * 2)
 
-        # --- [3] Decoder (Upsampling with Skip) ---
-        # self.dec1 = nn.Linear(bn_dim * 2 + hidden_dim, hidden_dim) 
-        # self.act_dec1 = nn.ReLU()
-        self.dec1 = nn.Linear(bn_dim * 2 + input_flat_dim, hidden_dim) 
+        # --- [3] Decoder ---
+        # Input: PQC Features (bn_dim * 2) + Skip Connection (hidden_dim)
+        # [수정] hidden_dim에 *2를 하지 않습니다 (e1이 실수이므로).
+        self.dec1 = nn.Linear(bn_dim * 2 + hidden_dim, hidden_dim) 
         self.act_dec1 = nn.ReLU()
-        # Final Output: 256 dim (Complex 출력을 위해 2배인 512 출력)
-        # 지름길 학습 방지를 위해 Input Skip은 제거
+        
+        # Final Output Projection (Back to Complex dimension: input_dim * 2)
         self.final = nn.Linear(hidden_dim, input_dim * 2)
 
     def forward(self, input):
-        # input: (T, Batch, 256) Complex
         T_steps, batch_size, dim = input.shape
+        epsilon = 1e-8
         
-        # 1. Flatten Input (Real + Imag)
+        # 1. Reshape Input
         x = input.reshape(T_steps * batch_size, dim)
-        # 원본 입력을 실수 벡터로 펼칩니다. (나중에 Skip으로 씀)
-        x_flat = torch.cat([x.real, x.imag], dim=-1) # (Batch, 512)
 
         # --- Encoder ---
-        e1 = self.enc1(x)        # (Batch, 64)
-        latent = self.enc2(e1)   # (Batch, 2*bn_dim)
+        e1 = self.enc1(x)        # Shape: (Batch, hidden_dim) [REAL Tensor]
+        latent = self.enc2(e1)   # Shape: (Batch, 2*bn_dim)
         
-        # --- Quantum State Prep ---
+        # --- Quantum State Preparation ---
         bn_dim = 2 ** self.bn_qubits
         state = torch.complex(latent[:, :bn_dim], latent[:, bn_dim:])
-        state = state / (torch.norm(state, p=2, dim=1, keepdim=True) + 1e-8)
+        state = state / (torch.norm(state, p=2, dim=1, keepdim=True) + epsilon)
         
         # --- PQC Execution ---
         state_reshaped = state.reshape(T_steps, batch_size, -1)
@@ -500,9 +611,9 @@ class QuantumUNet(nn.Module):
         # --- Decoder ---
         pqc_feats = torch.cat([pqc_out.real, pqc_out.imag], dim=-1)
         
-        # [핵심 변경] e1 대신 x_flat(원본)을 결합합니다.
-        # 이제 Decoder는 '압축된 정보'와 '원본 정보'를 동시에 봅니다.
-        d1_input = torch.cat([pqc_feats, x_flat], dim=1) 
+        # [수정] Skip Connection: e1이 이미 실수이므로 그대로 결합합니다.
+        # e1.real/imag 분리 로직 제거 -> e1 사용
+        d1_input = torch.cat([pqc_feats, e1], dim=1) 
         
         d1 = self.act_dec1(self.dec1(d1_input))
         out_feats = self.final(d1)
@@ -511,36 +622,62 @@ class QuantumUNet(nn.Module):
         out_real = out_feats[:, :dim]
         out_imag = out_feats[:, dim:]
         out = torch.complex(out_real, out_imag)
-        out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + 1e-8)
+        
+        out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + epsilon)
         
         return out.reshape(T_steps, batch_size, dim)
-    
-    # --- PQC의 파라미터 관리 기능 연동 (상속 효과) ---
+
+    # --- Parameter Management (기존과 동일) ---
     def get_pqc_params(self):
-        return self.pqc_bottleneck.get_pqc_params() + \
-               list(self.enc1.parameters()) + list(self.enc2.parameters()) + \
-               list(self.dec1.parameters()) + list(self.final.parameters())
+        return list(self.parameters())
+
+    def get_mlp_params(self):
+        return []
 
     def save_params(self, directory, epoch=None, best=False):
-        for i in range(self.T):
-            filename = f'best{i}.pt' if best else (f'current{i}.pt' if epoch is None else f'epoch{epoch}_T{i}.pt')
-            pqc_params = {
-                'params1': self.pqc_bottleneck.params1[i].detach().clone(),
-                'params2': self.pqc_bottleneck.params2[i].detach().clone(),
-                'params3': self.pqc_bottleneck.params3[i].detach().clone(),
-                'unet_state': self.state_dict()
-            }
-            torch.save(pqc_params, f'{directory}/{filename}')
-            
+        if best:
+            filename = 'best_model.pt'
+        elif epoch is not None:
+            filename = f'epoch{epoch}_model.pt'
+        else:
+            filename = 'current_model.pt'
+        save_path = f'{directory}/{filename}'
+        
+        torch.save({
+            'model_state_dict': self.state_dict(),
+            'epoch': epoch,
+            'best_loss': self.best_loss
+        }, save_path)
+
     def load_current_params(self, directory, epoch=None, noise=None):
-        i = self.T - 1
-        path = f'{directory}/current{i}.pt' if epoch is None else f'{directory}/epoch{epoch}_T{i}.pt'
+        filename = f'epoch{epoch}_model.pt' if epoch is not None else 'current_model.pt'
+        path = f'{directory}/{filename}'
+        self._load_params_from_file(path)
+
+    def load_best_params(self, directory, noise=None):
+        path = f'{directory}/best_model.pt'
+        self._load_params_from_file(path)
+
+    def _load_params_from_file(self, path):
         try:
-            loaded_params = torch.load(path, map_location=self.device)
-            if 'unet_state' in loaded_params:
-                self.load_state_dict(loaded_params['unet_state'])
+            checkpoint = torch.load(path, map_location=self.device)
+            if 'model_state_dict' in checkpoint:
+                self.load_state_dict(checkpoint['model_state_dict'])
+            elif 'unet_state' in checkpoint: 
+                self.load_state_dict(checkpoint['unet_state'])
+            else:
+                self.load_state_dict(checkpoint)
         except FileNotFoundError:
             pass
+        except Exception as e:
+            print(f"Error loading model: {e}")
 
-    def get_mlp_params(self): return []
-    
+    def update_best_params(self, directory, losses):
+        if isinstance(losses, list) or isinstance(losses, torch.Tensor):
+            current_total_loss = sum(losses) if isinstance(losses, list) else torch.sum(losses).item()
+        else:
+            current_total_loss = losses
+
+        if current_total_loss < self.best_loss:
+            self.best_loss = current_total_loss
+            self.save_params(directory, best=True)
