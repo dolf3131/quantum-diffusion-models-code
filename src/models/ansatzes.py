@@ -107,6 +107,30 @@ class QiskitPQCLayer(nn.Module):
         return self.qnn_torch(x)
 
 
+def ConvUnit(params, wires):
+    """
+    User-defined 2-Qubit Convolution Layer (3 params)
+    Applies a specific unitary operation on two qubits.
+    """
+    # params: [theta0, theta1, theta2]
+    # wires: [control, target] (or just two adjacent qubits)
+    
+    # Qiskit/PennyLane syntax adaptation
+    # Note: Removing list brackets [] around angles for scalar compatibility
+    
+    qml.RZ(-np.pi/2, wires=wires[1])
+    qml.CNOT(wires=[wires[1], wires[0]])
+    
+    qml.RZ(params[0], wires=wires[0])
+    qml.RY(params[1], wires=wires[1])
+    
+    qml.CNOT(wires=[wires[0], wires[1]])
+    
+    qml.RY(params[2], wires=wires[1])
+    
+    qml.CNOT(wires=[wires[1], wires[0]])
+    qml.RZ(np.pi/2, wires=wires[0])
+
 class PennyLanePQCLayer(nn.Module):
     def __init__(self, num_qubits, reps=2):
         super(PennyLanePQCLayer, self).__init__()
@@ -132,17 +156,40 @@ class PennyLanePQCLayer(nn.Module):
             # (1) Data Encoding
             qml.AngleEmbedding(scaled_inputs, wires=range(num_qubits), rotation='Y')
 
+
+            # def ConvUnit(params, wires):
+            #     """
+            #     2-Qubit Convolution Layer, params =3
+            #     """
+            #     param_idx = 0
+                
+            #     qml.RZ([-np.pi/2], wires=wires[1])
+            #     qml.CNOT(wires=[wires[1], wires[0]])
+            #     qml.RZ(params[param_idx], wires=wires[0]); param_idx += 1
+            #     qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
+            #     qml.CNOT(wires=[wires[0], wires[1]])
+            #     qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
+            #     qml.CNOT(wires=[wires[1], wires[0]])
+            #     qml.RZ([np.pi/2], wires=wires[0])
+            #     return param_idx
+
             # (2) Ansatz (RealAmplitudes Style: Ry + CNOT)
+            for i in range(num_qubits):
+                qml.H(wires=[i])
             # weights shape: (depth, num_qubits)
             for d in range(reps):
-                # Entangling Layer (Linear Entanglement)
-                if num_qubits > 1:
-                    for i in range(num_qubits - 1):
-                        qml.CNOT(wires=[i, i+1])
+                layer_params = weights[d] # Shape: (3,)
                 
-                # Rotation Layer
-                for i in range(num_qubits):
-                    qml.RY(weights[d, i], wires=i)
+                # Sliding Window (Convolution)
+                if num_qubits > 1:
+                    for i in range(0, num_qubits-1, 2):
+                        # i번째와 (i+1)번째 큐비트에 ConvUnit 적용 (마지막은 0번과 연결)
+                        ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
+                    for i in range(1, num_qubits, 2):
+                        ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
+                else:
+                    qml.RY(layer_params[0], wires=0)
+                    qml.RZ(layer_params[1], wires=0)
             
             # (3) Measurement (Expectation Value of Z for each qubit)
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
