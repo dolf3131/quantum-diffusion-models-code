@@ -183,7 +183,6 @@ class PennyLanePQCLayer(nn.Module):
                 # Sliding Window (Convolution)
                 if num_qubits > 1:
                     for i in range(0, num_qubits-1, 2):
-                        # i번째와 (i+1)번째 큐비트에 ConvUnit 적용 (마지막은 0번과 연결)
                         ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
                     for i in range(1, num_qubits, 2):
                         ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
@@ -194,11 +193,10 @@ class PennyLanePQCLayer(nn.Module):
             # (3) Measurement (Expectation Value of Z for each qubit)
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
-        # 3. Weight Shapes 정의
-        # Ansatz에서 사용할 파라미터의 크기: (depth, num_qubits)
+        # 3. Weight Shapes
         weight_shapes = {"weights": (reps, num_qubits)}
         
-        # 4. TorchLayer 생성
+        # 4. TorchLayer
         self.qnn = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
 
     def forward(self, x):
@@ -259,14 +257,12 @@ class QuantumUNet(nn.Module):
         # --- Qiskit PQC Execution ---
         epsilon = 1e-8
         latent_norm = torch.norm(latent, p=2, dim=-1, keepdim=True)
-        # 0으로 나누는 것을 방지
         latent = latent / (latent_norm + epsilon)
         pqc_out = self.pqc(latent) # (T*B, bottleneck_qubits)
 
         with torch.no_grad():
             for param in self.pqc.parameters():
                 if param.requires_grad:
-                    # 기존 랜덤 값에 init_variance를 곱해 스케일링
                     param.data = param.data * self.init_variance
         # --- Decoder ---
         d1_input = torch.cat([pqc_out, x_flat], dim=1)
