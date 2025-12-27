@@ -137,8 +137,7 @@ class PennyLanePQCLayer(nn.Module):
         self.num_qubits = num_qubits
         self.reps = reps
         
-        # 1. Device 정의
-        # 'lightning.qubit'은 C++ 기반 고성능 시뮬레이터입니다. (설치 안되어 있으면 'default.qubit' 사용)
+        # 1. Device de
         try:
             dev = qml.device("lightning.qubit", wires=num_qubits)
         except:
@@ -149,29 +148,10 @@ class PennyLanePQCLayer(nn.Module):
         def quantum_circuit(inputs, weights):
             
             # (1) Data Encoding (Angle Encoding)
-            # 입력 데이터(latent vector)를 각도로 변환하여 주입
-            # inputs shape: (batch_size, num_qubits) -> PennyLane이 알아서 처리
             scaled_inputs = torch.pi * torch.tanh(inputs)
             
             # (1) Data Encoding
             qml.AngleEmbedding(scaled_inputs, wires=range(num_qubits), rotation='Y')
-
-
-            # def ConvUnit(params, wires):
-            #     """
-            #     2-Qubit Convolution Layer, params =3
-            #     """
-            #     param_idx = 0
-                
-            #     qml.RZ([-np.pi/2], wires=wires[1])
-            #     qml.CNOT(wires=[wires[1], wires[0]])
-            #     qml.RZ(params[param_idx], wires=wires[0]); param_idx += 1
-            #     qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
-            #     qml.CNOT(wires=[wires[0], wires[1]])
-            #     qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
-            #     qml.CNOT(wires=[wires[1], wires[0]])
-            #     qml.RZ([np.pi/2], wires=wires[0])
-            #     return param_idx
 
             # (2) Ansatz (RealAmplitudes Style: Ry + CNOT)
             for i in range(num_qubits):
