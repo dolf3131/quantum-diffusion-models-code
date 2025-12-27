@@ -257,7 +257,7 @@ class QuantumUNet(nn.Module):
         # Normalize
         out = torch.complex(out_real, out_imag)
         
-        out = out / (torch.sum(out, dim=1, keepdim=True) + epsilon)
+        out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + epsilon)
         
         return out.reshape(T_steps, batch_size, dim)
 
