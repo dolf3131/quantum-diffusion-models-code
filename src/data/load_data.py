@@ -16,7 +16,7 @@ def load_mnist(desired_digits, data_length=None, device=None):
     Returns:
         torch.Tensor: The processed dataset tensor.
     """
-    device = torch.device(device) if device is not None else torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+    device = torch.device(device) if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     # Determine the directory one level up from the script's location
     script_dir = os.path.dirname(os.path.abspath(__file__))

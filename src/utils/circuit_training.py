@@ -60,7 +60,7 @@ def training(path, config, data_length):
     # 3. Training Setup
     betas, alphas_bar = make_schedule(beta0, betaT, T, schedule, schedule_exponent, device)
     best_loss = float('inf')
-    sample_log_interval = 20  # interval of save image
+    sample_log_interval = 10  # interval of save image
 
     # Directories
     tensorboard_dir = os.path.join(path, 'TensorBoard')
@@ -104,8 +104,13 @@ def training(path, config, data_length):
         circuit.load_current_params(param_path)
 
     # 9. DataLoader
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-
+    data_loader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        drop_last=True,
+        num_workers=0
+    )
     # 10. Scheduler & Loss Monitor
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=scheduler_patience, gamma=scheduler_gamma)
     loss_monitor = LossHistory(logs_dir, len(data_loader))
@@ -123,18 +128,22 @@ def training(path, config, data_length):
             # --- Data Preparation ---
             
             # shape: (BS*T)
-            t = torch.tensor(range(1, T+1), dtype=torch.long).repeat_interleave(batch_size).to(device)
+            #t = torch.tensor(range(1, T+1), dtype=torch.long).repeat_interleave(batch_size).to(device)
+            t = torch.randint(1, T + 1, (batch_size,), device=device).long()
 
             # shape: (BS*T, 2^num_qubits)
-            image_batch = image_batch.repeat(T, 1).to(device)
+            image_batch = image_batch.to(device)#.repeat(T, 1).to(device)
             
             # Add Noise (Forward Diffusion)
             input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
             mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
 
             # Reshape for Model: (T, BS, Dim)
-            input_batch = input_batch.view(T, batch_size, -1)
-            mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
+            # input_batch = input_batch.view(T, batch_size, -1)
+            # mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
+            input_batch = input_batch.view(1, batch_size, -1)
+            mu_tilde_t  = mu_tilde_t.view(1, batch_size, -1)
+            
 
             # Normalize Quantum States
             eps = 1e-8

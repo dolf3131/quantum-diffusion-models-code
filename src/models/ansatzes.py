@@ -137,7 +137,7 @@ class PennyLanePQCLayer(nn.Module):
         self.num_qubits = num_qubits
         self.reps = reps
         
-        # 1. Device de
+        # 1. Device
         try:
             dev = qml.device("lightning.qubit", wires=num_qubits)
         except:
@@ -195,7 +195,7 @@ class QuantumUNet(nn.Module):
     def __init__(self, num_qubits, layers, T, init_variance, betas, activation=False, device='cuda', bottleneck_qubits=4, use_pooling=False):
         super(QuantumUNet, self).__init__()
         
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device)
         self.T = T
         self.betas = betas
         self.init_variance = init_variance
@@ -256,7 +256,8 @@ class QuantumUNet(nn.Module):
         
         # Normalize
         out = torch.complex(out_real, out_imag)
-        out = out / (torch.norm(out, p=2, dim=1, keepdim=True) + 1e-8)
+        
+        out = out / (torch.sum(out, dim=1, keepdim=True) + epsilon)
         
         return out.reshape(T_steps, batch_size, dim)
 
