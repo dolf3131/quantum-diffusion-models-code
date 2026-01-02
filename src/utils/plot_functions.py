@@ -93,7 +93,7 @@ def log_generated_samples(
 
     # Use default layers if not provided
     if pqc_layers is None:
-        pqc_layers = [4, 4, 4]
+        pqc_layers = [4]
 
     try:
         # Initialize the Qiskit-based QuantumUNet

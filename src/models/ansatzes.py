@@ -110,32 +110,96 @@ class QiskitPQCLayer(nn.Module):
 def ConvUnit(params, wires):
     """
     User-defined 2-Qubit Convolution Layer (3 params)
-    Applies a specific unitary operation on two qubits.
+    Args:
+        params: Flat tensor containing all parameters
+        wires: [control, target]
+        param_idx: Current index pointer in params
+    Returns:
+        Updated param_idx
     """
-    # params: [theta0, theta1, theta2]
-    # wires: [control, target] (or just two adjacent qubits)
-    
-    # Qiskit/PennyLane syntax adaptation
-    # Note: Removing list brackets [] around angles for scalar compatibility
+    param_idx = 0
     
     qml.RZ(-np.pi/2, wires=wires[1])
     qml.CNOT(wires=[wires[1], wires[0]])
     
-    qml.RZ(params[0], wires=wires[0])
-    qml.RY(params[1], wires=wires[1])
+    qml.RZ(params[param_idx], wires=wires[0]); param_idx += 1
+    qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
     
     qml.CNOT(wires=[wires[0], wires[1]])
     
-    qml.RY(params[2], wires=wires[1])
+    qml.RY(params[param_idx], wires=wires[1]); param_idx += 1
     
     qml.CNOT(wires=[wires[1], wires[0]])
     qml.RZ(np.pi/2, wires=wires[0])
+    
+    return param_idx
+
+def MixingBlock(params, wires):
+    """
+    RX + CRY based variational ansatz
+    Input params: 1D Tensor for this block
+    """
+    n = len(wires)
+    param_idx = 0
+    
+    # 1. RX Layer (n params)
+    for i in range(n):
+        qml.RX(params[param_idx], wires=wires[i])
+        param_idx += 1
+    
+    # 2. CRY Layer (Pairwise)
+    
+    # Even pairs: (0,1), (2,3)...
+    for i in range(0, n-1, 2):
+        qml.CNOT(wires=[wires[i], wires[(i+1)%n]])
+        qml.RZ(params[param_idx], wires=wires[(i+1)%n]); param_idx += 1
+        qml.CNOT(wires=[wires[i], wires[(i+1)%n]])
+        
+    # Odd pairs: (1,2), (3,4)...
+    for i in range(1, n, 2):
+        qml.CNOT(wires=[wires[i], wires[(i+1)%n]])
+        qml.RZ(params[param_idx], wires=wires[(i+1)%n]); param_idx += 1
+        qml.CNOT(wires=[wires[i], wires[(i+1)%n]])
+    
+    return param_idx
+
+def ZZInteractionLayer(params, wires):
+    """
+    [Phase Correlation]
+    ZZ gate
+    """
+    n = len(wires)
+    param_idx = 0
+    for i in range(0, n - 1, 2):
+        w1, w2 = wires[i], wires[i+1]
+        # ZZ Gate Decomposition: CNOT -> RZ -> CNOT
+        qml.CNOT(wires=[w1, w2])
+        qml.RZ(params[param_idx], wires=w2)
+        qml.CNOT(wires=[w1, w2])
+        param_idx += 1
+        
+    # 2. Even Pairs (짝수 쌍): (1,2), (3,4), ...
+    for i in range(1, n - 1, 2):
+        w1, w2 = wires[i], wires[i+1]
+        qml.CNOT(wires=[w1, w2])
+        qml.RZ(params[param_idx], wires=w2)
+        qml.CNOT(wires=[w1, w2])
+        param_idx += 1
+
+    return param_idx
+
 
 class PennyLanePQCLayer(nn.Module):
     def __init__(self, num_qubits, reps=2):
         super(PennyLanePQCLayer, self).__init__()
         self.num_qubits = num_qubits
         self.reps = reps
+        num_conv_even = len(range(0, num_qubits - 1, 2))
+        num_conv_odd  = len(range(1, num_qubits, 2)) 
+        self.total_conv_params = (num_conv_even + num_conv_odd) * 3
+        self.total_zz_params = num_qubits - 1
+        self.total_mixing_params = 2 * num_qubits + 3 * num_qubits
+        self.total_params_per_layer = self.total_conv_params + self.total_zz_params + self.total_mixing_params
         
         # 1. Device
         try:
@@ -143,54 +207,54 @@ class PennyLanePQCLayer(nn.Module):
         except:
             dev = qml.device("default.qubit", wires=num_qubits)
 
-        # 2. QNode (Quantum Circuit) 정의
-        @qml.qnode(dev, interface='torch', diff_method='adjoint') # <--- 여기가 핵심! 'adjoint'가 속도의 비결
+        # 2. QNode (Quantum Circuit)
+        @qml.qnode(dev, interface='torch', diff_method='adjoint')
         def quantum_circuit(inputs, weights):
             
-            # (1) Data Encoding (Angle Encoding)
-            scaled_inputs = torch.pi * torch.tanh(inputs)
-            
             # (1) Data Encoding
-            qml.AngleEmbedding(scaled_inputs, wires=range(num_qubits), rotation='Y')
+            qml.AmplitudeEmbedding(features=inputs, wires=range(num_qubits), normalize=True, pad_with=0.)
 
-            # (2) Ansatz (RealAmplitudes Style: Ry + CNOT)
+            # (2) Ansatz
             for i in range(num_qubits):
                 qml.H(wires=[i])
-            # weights shape: (depth, num_qubits)
+            
             for d in range(reps):
-                layer_params = weights[d] # Shape: (3,)
+                # --- [Layer 1] Convolution (Flattened Params) ---
+                current_layer_params = weights[d]
+                idx = 0
+
+                # --- Step 1: Convolution ---
+                # Even Pairs
+                for i in range(0, num_qubits-1, 2):
+                    idx += ConvUnit(current_layer_params[idx:], wires=[i, (i + 1) % num_qubits])
                 
-                # Sliding Window (Convolution)
-                if num_qubits > 1:
-                    for i in range(0, num_qubits-1, 2):
-                        ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
-                    for i in range(1, num_qubits, 2):
-                        ConvUnit(layer_params, wires=[i, (i + 1) % num_qubits])
-                else:
-                    qml.RY(layer_params[0], wires=0)
-                    qml.RZ(layer_params[1], wires=0)
+                # Odd Pairs
+                for i in range(1, num_qubits, 2):
+                    idx += ConvUnit(current_layer_params[idx:], wires=[i, (i + 1) % num_qubits])
+                
+
+                idx += ZZInteractionLayer(current_layer_params[idx:], wires=range(num_qubits))
+
+                # --- Step 3: Mixing --- 
+                # 2 times mixing per layer
+                idx += MixingBlock(current_layer_params[idx:], wires=range(num_qubits))
             
             # (3) Measurement (Expectation Value of Z for each qubit)
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
-        # 3. Weight Shapes
-        weight_shapes = {"weights": (reps, num_qubits)}
-        
-        # 4. TorchLayer
-        self.qnn = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
+        self.qnode = quantum_circuit
 
-    def forward(self, x):
-        # x: (Batch, num_qubits) -> Output: (Batch, num_qubits)
-        # PennyLane QNN은 입력을 받아서 측정값(실수)을 반환
-        return self.qnn(x)
+    def forward(self, x, weights):
+        result_list = self.qnode(x, weights)
+        return torch.stack(result_list, dim=-1)
 
 
 # --- [3] Qiskit or PennyLane Hybrid Quantum U-Net ---
 
 class QuantumUNet(nn.Module):
     """
-    Hybrid Quantum-Classical U-Net (Qiskit Version)
-    Encoder -> Qiskit PQC (Bottleneck) -> Decoder
+    Hybrid Quantum-Classical U-Net (PennyLane Version)
+    Encoder -> PennyLane PQC (Bottleneck) -> Decoder
     """
     def __init__(self, num_qubits, layers, T, init_variance, betas, activation=False, device='cuda', bottleneck_qubits=4, use_pooling=False):
         super(QuantumUNet, self).__init__()
@@ -205,24 +269,33 @@ class QuantumUNet(nn.Module):
         input_dim = 2 ** num_qubits          # ex: 256
         input_flat_dim = input_dim * 2       # ex: 512 (Real+Imag)
         hidden_dim = (2 ** num_qubits) * 2   # ex: 512
-        self.pqc_input_dim = bottleneck_qubits
+        self.pqc_input_dim = 2**bottleneck_qubits
         
         # --- [1] Encoder ---
         # Complex Input -> Latent Feature (Real)
-        self.enc1 = ComplexLinear(input_dim, hidden_dim) 
+        self.enc1 = ComplexLinear(input_dim, hidden_dim)
+        self.pqc_input_norm = nn.LayerNorm(self.pqc_input_dim)
+         
         self.enc2 = nn.Linear(hidden_dim, self.pqc_input_dim) # Output matches QNN input size
 
-        # --- [2] Qiskit PQC Bottleneck ---
+        # --- [2] PennyLane or Qiskit PQC Bottleneck ---
 
         #self.pqc = QiskitPQCLayer(num_qubits=bottleneck_qubits, reps=layers)
-        self.pqc = PennyLanePQCLayer(num_qubits=bottleneck_qubits, reps=layers)
+        self.pqc_layer = PennyLanePQCLayer(num_qubits=bottleneck_qubits, reps=layers)
         
+        self.pqc_weights = nn.Parameter(
+            torch.randn(
+                T, layers, self.pqc_layer.total_params_per_layer, 
+                device=self.device
+            ) * init_variance
+        )
+
         self.dec1 = nn.Linear(bottleneck_qubits + input_flat_dim, hidden_dim)
         self.act_dec1 = nn.ReLU()
         
         self.final = nn.Linear(hidden_dim, input_dim * 2)
 
-    def forward(self, input):
+    def forward(self, input, t=None):
         # input: (T, Batch, Dim) Complex Tensor
         T_steps, batch_size, dim = input.shape
         
@@ -234,16 +307,32 @@ class QuantumUNet(nn.Module):
         e1 = self.enc1(x)         # (T*B, hidden_dim) [Real]
         latent = self.enc2(e1)    # (T*B, bottleneck_qubits) [Real] - These are angles for QNN
 
-        # --- Qiskit PQC Execution ---
+        latent = self.pqc_input_norm(latent)
+        if torch.isnan(latent).any():
+            latent = torch.nan_to_num(latent, nan=0.0)
+
+        # --- PQC Execution ---
         epsilon = 1e-8
+        latent = latent + 1e-6
         latent_norm = torch.norm(latent, p=2, dim=-1, keepdim=True)
         latent = latent / (latent_norm + epsilon)
-        pqc_out = self.pqc(latent) # (T*B, bottleneck_qubits)
 
-        with torch.no_grad():
-            for param in self.pqc.parameters():
-                if param.requires_grad:
-                    param.data = param.data * self.init_variance
+        # --- Time-dependent Parameter Selection ---
+        if t is None:
+            selected_weights = self.pqc_weights[0] 
+        else:
+            if isinstance(t, int) or (isinstance(t, torch.Tensor) and t.ndim == 0):
+                idx = int(t) - 1
+                idx = max(0, min(idx, self.T - 1))
+                selected_weights = self.pqc_weights[idx]
+            else:
+                idx = int(t[0]) - 1
+                idx = max(0, min(idx, self.T - 1))
+                selected_weights = self.pqc_weights[idx]
+
+        pqc_out = self.pqc_layer(latent, selected_weights)
+
+
         # --- Decoder ---
         d1_input = torch.cat([pqc_out, x_flat], dim=1)
         

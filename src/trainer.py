@@ -18,7 +18,7 @@ hyperparameters = {
     "model_type":        ["UNet"],       # identifier
     "num_qubits":        [8],            # Input dimension: 2^8 = 256 (16x16 image)
     "bottleneck_qubits": [4],            # Number of Qiskit PQC
-    "pqc_layers":        [4],            # Reps of Qiskit RealAmplitudes
+    "pqc_layers":        [6],            # Reps of Qiskit RealAmplitudes
     "activation":        [False],        # Activation
 
     # --- Diffusion Process ---
@@ -30,7 +30,7 @@ hyperparameters = {
     
     # --- Training Configuration ---
     "batch_size":        [32],           
-    "num_epochs":        [50],           
+    "num_epochs":        [100],           
     "PQC_LR":            [1e-3],         # Learning Rate
     "wd_PQC":            [0.0],          # L2 Regularization (Weight Decay)
     "init_variance":     [0.1],          # Parameter initialization variance
@@ -40,7 +40,7 @@ hyperparameters = {
     "scheduler_gamma":   [0.5],          # LR Reduction factor
 
     # --- Data & Misc ---
-    "digits":            [[0, 1]], # dataset
+    "digits":            [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]], # dataset
     "checkpoint":        [None],         # Resume training from path (e.g., '/path/to/Params/')
 }
 

@@ -127,13 +127,18 @@ def training(path, config, data_length):
 
             # --- Data Preparation ---
             
-            # shape: (BS*T)
+            # shape: (BS*T) uniformly train
             #t = torch.tensor(range(1, T+1), dtype=torch.long).repeat_interleave(batch_size).to(device)
+
+            # shape: (BS*1) random selected train
             t = torch.randint(1, T + 1, (batch_size,), device=device).long()
 
             # shape: (BS*T, 2^num_qubits)
-            image_batch = image_batch.to(device)#.repeat(T, 1).to(device)
+            #image_batch = image_batch.repeat(T, 1).to(device)
             
+            # shape: (BS*1, 2^num_qubits) only one
+            image_batch = image_batch.to(device)
+
             # Add Noise (Forward Diffusion)
             input_batch = assemble_input(image_batch, t, alphas_bar).to(torch.complex64)
             mu_tilde_t  = assemble_mu_tilde(image_batch, input_batch, t, alphas_bar, betas).to(torch.complex64)
@@ -141,6 +146,8 @@ def training(path, config, data_length):
             # Reshape for Model: (T, BS, Dim)
             # input_batch = input_batch.view(T, batch_size, -1)
             # mu_tilde_t  = mu_tilde_t.view(T, batch_size, -1)
+            
+            # selected t
             input_batch = input_batch.view(1, batch_size, -1)
             mu_tilde_t  = mu_tilde_t.view(1, batch_size, -1)
             
@@ -155,13 +162,13 @@ def training(path, config, data_length):
 
             # --- Loss Calculation ---
             losses = infidelity_loss(predicted_mu_t, mu_tilde_t)
-
             # Logging & Optimization
             loss_monitor.log_losses(losses, writer)
-            loss = torch.mean(losses)
+            diff_loss = torch.mean(losses)
+            loss = diff_loss
             loss.backward()
             optimizer.step()
-
+            
             # Update Progress Bar
             epoch_progress_bar.set_postfix({'Loss': f"{loss.item():.5f}"})
             epoch_losses.append(loss.detach().item())
